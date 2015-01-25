@@ -25,11 +25,12 @@ logger = logging.getLogger('Denon')
 class Denon():
 
     # Initialize connection to receiver
-    def __init__(self, smarthome, denon_ip, denon_port=80, cycle=3):
+    def __init__(self, smarthome, denon_ip, denon_port=80, denon_upnp_port=8080, cycle=3):
         
 #        pydevd.settrace('192.168.2.57')
         self._denonIp = denon_ip
         self._denonPort = denon_port
+        self._denonUpnpPort = denon_upnp_port
         self._sh = smarthome
         self._cycle = int(cycle)
         # variablen zur steuerung des plugins
@@ -45,7 +46,7 @@ class Denon():
         self._listenItems = {}
         self._commandItems = {}
         self._commandLock = threading.Lock()
-        self._upnp = UPNPDenon('192.168.2.27','8080')
+        self._upnp = UPNPDenon(denon_ip, denon_upnp_port)
 #        self._update_status()
 
     def run(self):
