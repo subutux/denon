@@ -5,7 +5,13 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.1
+# v 0.2
+# changelog:
+# - refactoring: include upnp inside plugin
+# - error fixes
+# - replace xml library with element tree
+# - adding some status / device messages
+# - adding errorstatus item for monitoring connections
 # 
 # based on some concepts already made for Denon.
 # Removes completely the Telnet Interface.
@@ -17,7 +23,7 @@ import logging
 import threading
 import http.client
 import xml.etree.ElementTree as et
-from plugins.denon.upnp import UPNPDenon
+import html.parser
 import pydevd
 
 logger = logging.getLogger('Denon')
@@ -25,7 +31,7 @@ logger = logging.getLogger('Denon')
 class Denon():
 
     # Initialize connection to receiver
-    def __init__(self, smarthome, denon_ip, denon_port=80, denon_upnp_port=8080, cycle=3):
+    def __init__(self, smarthome, denon_ip, denon_port = '80', denon_upnp_port = '8080', cycle = 3):
         
 #        pydevd.settrace('192.168.2.57')
         self._denonIp = denon_ip
@@ -36,21 +42,61 @@ class Denon():
         # variablen zur steuerung des plugins
         # hier werden alle bekannte items für lampen eingetragen
         self._sendKeys = {'MasterVolume', 'Power', 'Mute', 'InputFuncSelect', 'SurrMode', 'SetAudioURI'}
-        self._listenKeys = {'MasterVolume', 'Power', 'Mute', 'InputFuncSelect', 'SurrMode', 'szLine'} 
-        self._commandKeys = {'MV<x>', 'Z2<x>','PSBAS <x>','PSTRE <x>','Z2PSBAS <x>','Z2PSTRE <x>'}
+        self._listenKeys = {'MasterVolume', 'Power', 'Mute', 'InputFuncSelect', 'SurrMode', 'szLine',
+                            'DeviceZones', 'MacAddress', 'ModelName'} 
         # die Zones werden in der Device übersicht mit 0 = main und 1 = zone2 übertragen
-        self._zoneName = {'0' : 'StatusAudio', '1' : 'MAIN ZONE', '2': 'ZONE2'}
-        self._zoneXMLCommandURI = {'0' :'formNetAudio_StatusXml.xml', '1' : 'formMainZone_MainZoneXmlStatus.xml', '2': 'formZone2_Zone2XmlStatus.xml'}
+        self._zoneName = {'0' : 'Status', '1' : 'MAIN ZONE', '2': 'ZONE2'}
+        self._zoneXMLCommandURI = {'0' :'/goform/formNetAudio_StatusXml.xml', '1' : '/goform/formMainZone_MainZoneXmlStatus.xml', '2': '/goform/formZone2_Zone2XmlStatus.xml'}
+        self._XMLDeviceInfoURI = {'0': '/goform/Deviceinfo.xml'}
         # hier werden alle bekannte items für lampen eingetragen
         self._sendItems = {}
         self._listenItems = {}
         self._commandItems = {}
         self._commandLock = threading.Lock()
-        self._upnp = UPNPDenon(denon_ip, denon_upnp_port)
-#        self._update_status()
-
+        # die uri für denupnp command channel gilt für den x3000
+        # evt. muss hier über einen discovery mechanismus die richtig herausgefunden werden
+        # im moment wird die konfiguration statisch gebaut bzw. vorgegeben. in einem erweiterungsschritt
+        # könnte man die xml SOAP nachrichten per eTree zusammenbauen.
+        self._uriCommand = "/AVTransport/ctrl"
+        self._SetAVTransportURI = { 
+            'headers': {
+                'SOAPACTION': '"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI"',
+                'CONTENT-TYPE' : 'text/xml; charset="utf-8"',
+                'USER-AGENT' :'smarthome/denon plugin v0.1' 
+                        },
+            'body': '<?xml version="1.0" encoding="utf-8"?>\r\n'
+                '<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">\r\n'
+                    '<s:Body>'
+                        '<u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">\r\n'
+                            '<InstanceID>0</InstanceID>\r\n'
+                            '<CurrentURI>{0}</CurrentURI>\r\n'
+                            '<CurrentURIMetaData>' 
+                            '</CurrentURIMetaData>\r\n'
+                        '</u:SetAVTransportURI>\r\n'
+                    '</s:Body>\r\n'
+                '</s:Envelope>\r\n' 
+            }
+        self._Play = {
+            'headers': {
+                'SOAPACTION': '"urn:schemas-upnp-org:service:AVTransport:1#Play"',
+                'CONTENT-TYPE' : 'text/xml; charset="utf-8"',
+                'USER-AGENT' :'smarthome/denon plugin v0.1' 
+                },
+            'body': '<?xml version="1.0" encoding="utf-8"?>\r\n'
+                '<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">\r\n'
+                    '<s:Body>'
+                        '<u:Play xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">\r\n'
+                            '<InstanceID>0</InstanceID>\r\n'
+                            '<Speed>1</Speed>\r\n'
+                        '</u:Play>\r\n'
+                    '</s:Body>\r\n'
+                '</s:Envelope>\r\n' 
+        } 
+        
     def run(self):
         self.alive = True
+        # einmalig zum start die Device info abholen
+        self._get_deviceinfo()
         # After power on poll status objects
         self._sh.scheduler.add('denon-status-update', self._update_status, cycle=self._cycle)
         # anstossen des updates zu beginn
@@ -72,6 +118,16 @@ class Denon():
         itemAttribute = int(itemSearch.conf[attribute])
         return str(itemAttribute)
     
+    def _limit_range_int(self, value, minValue, maxValue):
+        # kurze routine zur wertebegrenzung
+        if value >= maxValue:
+            value = int(maxValue)
+        elif value < minValue:
+            value = int(minValue)
+        else:
+            value = int(value)
+        return value
+
     def parse_item(self, item):
     # Parse items and bind commands to plugin
         # die kommandos denon_send und denon command können nur alternativ vorkommen, das kommando
@@ -126,16 +182,6 @@ class Denon():
     def parse_logic(self, logic):
         pass
 
-    def _limit_range_int(self, value, minValue, maxValue):
-        # kurze routine zur wertebegrenzung
-        if value >= maxValue:
-            value = int(maxValue)
-        elif value < minValue:
-            value = int(minValue)
-        else:
-            value = int(value)
-        return value
-
     def update_send_item(self, item, caller=None, source=None, dest=None):
     # Receive commands, process them and forward them to receiver
         if caller != 'DENON':
@@ -145,20 +191,20 @@ class Denon():
             value = item()
             if command == 'Power':
                 if item():
-                    self._set_command('formiPhoneAppPower.xml?' + zone + '+PowerON')
+                    self._request(self._denonIp, self._denonPort, 'GET', '/goform/formiPhoneAppPower.xml?' + zone + '+PowerON')
                 else:
-                    self._set_command('formiPhoneAppPower.xml?' + zone + '+PowerStandby')
+                    self._request(self._denonIp, self._denonPort, 'GET', '/goform/formiPhoneAppPower.xml?' + zone + '+PowerStandby')
             elif command == 'Mute':
                 if item():
-                    self._set_command('formiPhoneAppMute.xml?' + zone + '+MuteON')
+                    self._request(self._denonIp, self._denonPort, 'GET', '/goform/formiPhoneAppMute.xml?' + zone + '+MuteON')
                 else:
-                    self._set_command('formiPhoneAppMute.xml?' + zone + '+MuteOFF')
+                    self._request(self._denonIp, self._denonPort, 'GET', '/goform/formiPhoneAppMute.xml?' + zone + '+MuteOFF')
             elif command == 'MasterVolume':
                 value = self._limit_range_int(value,0,99)
-                self._set_command('formiPhoneAppVolume.xml?' + zone + '+{0}'.format(int(value-80)))
+                self._request(self._denonIp, self._denonPort, 'GET', '/goform/formiPhoneAppVolume.xml?' + zone + '+{0}'.format(int(value-80)))
             elif command == 'SetAudioURI':
-                logger.warning('DENON: update_send_item: audio uri: {0}'.format(value))
-                self._upnp._play(value)
+                self._upnp_set_uri(value)
+                self._upnp_play()
     
     def update_command_item(self, item, caller=None, source=None, dest=None):
     # Receive commands, process them and forward them to receiver
@@ -166,55 +212,53 @@ class Denon():
             # ansonsten wird das angewählte kommando verwendet und entsprechend formatiert
             command = item.conf['denon_command']
             # jetzt  bauen wir uns den befehl mit den parametern zusammen
-            if not command in self._commandKeys:
-                logger.warning('DENON: update_command_item: command {0} is not in the checked list !'.format(command))
-            if command.find('<x>'):
+            if command.find('<x>') != -1:
                 # es ist ein kommando mit parameter. dieser wird durch den Wert des items ersetzt 
-                command = command.replace('<x>',str(int(item())))
+                command = command.replace('<x>',item())
             # zur übergabe müssen die leerzeichen ersetzt werden
             command = command.replace(' ','%20')
-            self._set_command('formiPhoneAppDirect.xml?'+command)
-    
-    def _set_command(self, command):
-        # denon avr mit einem http request GET abfragen bzw. kommando ausgeben
+            logger.warning('DENON: update_command_item: item [{0}], value: {1}, command {2}'.format(item,item(),command))
+            self._request(self._denonIp, self._denonPort, 'GET', '/goform/formiPhoneAppDirect.xml?'+command)
+
+    def _request(self, ip, port, method, path, data=None, header=None):
+        # denon avr mit einem http request abfragen
         try:
-            self._commandLock.acquire()
-            connectionDenon = http.client.HTTPConnection(self._denonIp)
-            connectionDenon.request('GET', '/goform/%s' % command)
+            connectionUpnp = http.client.HTTPConnection(ip, port)
+            if method == 'GET':
+                connectionUpnp.request(method, path)
+            else:
+                connectionUpnp.request(method, path, data.encode(), header)
         except Exception as e:
-            logger.error('DENON Main: _request: problem in http.client exception : {0} '.format(e))
+            logger.error('DENON: _request: problem in http.client exception : {0} '.format(e))
             if 'errorstatus' in self._listenItems:
                 # wenn der item abgelegt ist, dann kann er auch gesetzt werden
-                self._listenItems['errorstatus'](True, 'DENON')
-            if connectionDenon:
-                connectionDenon.close()
-            self._commandLock.release()
+                self._listenItems['errorstatus'](True,'DENON')
+            if connectionUpnp:
+                connectionUpnp.close()
         else:
-            responseRaw = connectionDenon.getresponse()
-            connectionDenon.close()
-            self._commandLock.release()
+            responseRaw = connectionUpnp.getresponse()
+            connectionUpnp.close()
             if 'errorstatus' in self._listenItems:
                 # wenn der item abgelegt ist, dann kann er auch rückgesetzt werden
-                self._listenItems['errorstatus'](False, 'DENON')
+                self._listenItems['errorstatus'](False,'DENON')
             # rückmeldung 200 ist OK
             if responseRaw.status != 200:
-                logger.error('DENON Main: _request: response Raw: Request failed')
+                logger.error('DENON: _request: response Raw: Request failed')
                 return None
-            # lesen, decodieren nach utf-8 
-            response = responseRaw.read().decode('utf-8')
-            # logger.warning('DENON: Command: /goform/{0} : response: {1}'.format(command, response))
-            if len(response) > 0:
-                return et.fromstring(response)
             else:
-                return None
-
+                response= responseRaw.read().decode('utf-8')
+                if len(response) > 0:
+                    return et.fromstring(response)
+                else:
+                    return None           
+                
     def _update_status(self):
     # Poll XML status
     # ToDo müssen alle themen wirklich so abgearbeitet werden, oder kann ich auf ein subset referezieren bei der Abarbeitung des XML
         # status abholen
         # über alles zones, zone 0 ist der Status
         for denonZone in self._zoneName:
-            responseEtree = self._set_command(self._zoneXMLCommandURI[denonZone])
+            responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._zoneXMLCommandURI[denonZone])
             # durchinterieren über alle einträge für das listen
             # es ist nur die erste ebene !
             for node in responseEtree:
@@ -231,25 +275,49 @@ class Denon():
                                 value = 0
                             else:
                                 value = int(float(value) + 80)
-                        elif node.tag in ['szLine']:
+                        elif node.tag == 'szLine' and value == 'Now Playing':
+                            # für now playing. ansonsten kann auch menueinträge dort stattfinden
                             # dieser kann aus meherer Zeilen zusammengesetzt sein
                             value = ''
                             for child in node.getchildren():
-                                if child.text:
-                                    value = value + child.text + '\r\n'
+                                if child.text and not child.text == 'Now Playing':
+                                    value = value + child.text
+                            # da ist der Text im XML mehrfach daneben codiert. als erstes müssen die  HTML codiert 
+                            # geschickt umgebaut werden, dann sind immer noch die Umlaute verstümmelt
+                            # das bekommen wird mit dem Trick encode / decode wieder hin.
+                            value = html.parser.HTMLParser().unescape(value)
+                            # es gibt ab und zu einmal eine exception ????
+                            value = value.encode('raw_unicode_escape').decode('utf-8')
                         self._listenItems[denonListen](value,'DENON')
 
-if __name__ == '__main__':
-    
-    def __item(value, caller):
-        print('DENON: _update_status: value: [{0}]: caller: [{1}]'.format(value,caller))
-        
-    d = Denon('test','192.168.2.27')
-    d._listenItems = {'0szLine' : __item,
-                      '1MasterVolume' : __item, '1Power': __item, '1Mute' : __item, '1InputFuncSelect' : __item, '1SurrMode' : __item,
-                      '2MasterVolume' : __item, '2Power': __item, '2Mute' : __item, '2InputFuncSelect' : __item, '2SurrMode' : __item
-                      }
-    d._update_status()
-    
+    def _get_deviceinfo(self):
+        responseEtree = self._set_command(self._XMLDeviceInfoURI['0'])
+        # durchinterieren über alle einträge für das listen
+        # es ist nur die erste ebene !
+        for node in responseEtree:
+            returnItemIndex = '0' + node.tag
+            for denonListen in self._listenItems:
+                if denonListen == returnItemIndex:
+                    value = node.text
+                    self._listenItems[denonListen](value,'DENON')
 
-            
+    def _upnp_set_uri(self, uriAudioSource):
+        # setzen des bodys mit der uri für die source
+        body =  self._SetAVTransportURI['body'].format(uriAudioSource)
+        # setzen und anpassen der headers
+        header = self._SetAVTransportURI['headers']
+        header['Content-Length'] = len(body)
+        header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
+        # abfrage der daten per request
+        self._request("POST", self._denonIp, self._denonUpnpPort, self._uriCommand, body, header)
+
+    def _upnp_play(self):
+        # setzen des bodys mit der uri für die source
+        header = self._Play['headers']
+        body =  self._Play['body']   
+        header['Content-Length'] = len(body)
+        header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
+        # abfrage der daten per request
+        self._request("POST", self._denonIp, self._denonUpnpPort, self._uriCommand, body, header)
+
+        

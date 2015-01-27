@@ -1,8 +1,9 @@
-# Phillips HUE
+# Denon Plugin 
+based in X3000, but should work on some Marantz as well
 
 ## New development of DENON plugin for use in smarthome.py (C) Michael Würtenberger 2015
 ## first beta releases just at your own risk ! feedback welcome in smarthome.py forum
-version 0.1 
+version 0.2
 ### Targets: 
 - no use of telnet interface anymore
 - using xml - webapp interface
@@ -36,15 +37,26 @@ Default 80. Normally there is no need to change that.
 
 ## items.conf
 
-#### Examples of Denon send commands
+#### Examples of Denon send/listen commands
 
 <pre>
 Attribute            Type   Range                           Readable    Writable
 'Power'              bool   False / True                    yes         yes
 'MasterVolume'       num    0-99                            yes         yes
 'Mute'               bool   False / True                    yes         yes
-'InputFuncSelect'    str                                    yes         no
-'SurrMode'           str                                    yes         no
+'InputFuncSelect'    str                                    yes         yes
+'SurrMode'           str                                    yes         yes
+'ModelName'          str                                    yes         no
+'DeviceZones'        str    '1' - '2'                       yes         no
+'MacAddress'         str    'aabbccddee'                    yes         no
+</pre>
+
+#### Examples Surround Modes
+<pre>
+Attribute            
+'DIRECT'  'STEREO'   'PURE DIRECT'   'DOLBY Surrounds'   'DTS Surrounds'
+'MULTI CH STEREO'   'ROCK ARENA'   'JAZZ CLUB'   'MONO MOVIE'   'VIDEO GAME'
+'MATRIX'   'VIRTUAL'
 </pre>
 
 ### denon_send
@@ -62,6 +74,11 @@ Nearly every command of the telnet interface decription could be used. Ther is n
 If you would like to use a parameter, please define the parameter with <x>. If set, the actual item value
 is written to the command parameter. 
 
+#### Configuration API (Plugin related)
+<pre>
+Attribute            Type   Range                           Readable    Writable
+'errorstatus'        bool   False / True                    yes         no
+</pre>
 
 ## Example
 # items/test.conf
@@ -69,11 +86,26 @@ is written to the command parameter.
 <pre>
 [mm]
     [[denon]]
+
     	[[[status]]]
     		denon_zone = 0
+    		# device infos -> received once per start
+	        [[[[ModelName]]]]
+	            type = str
+	            denon_listen = ModelName
+	        [[[[DeviceZones]]]]
+	            type = str
+	            denon_listen = DeviceZones
+	        [[[[MacAddress]]]]
+	            type = str
+	            denon_listen = MacAddress
+	        # staus objects received cyclic
 	        [[[[nowPlaying]]]]
 	            type = str
 	            denon_listen = szLine
+	        [[[[errorstatus]]]]
+	            type = str
+	            denon_listen = errorstatus
 
     	[[[main]]]
     		denon_zone = 1
@@ -95,6 +127,7 @@ is written to the command parameter.
 	            denon_listen = InputFuncSelect
 	        [[[[SurrMode]]]]
 	            type = str
+	            denon_command = '<x>'
 	            denon_listen = SurrMode
 	        [[[[seturi]]]]
 	            type = str
@@ -125,13 +158,11 @@ is written to the command parameter.
 	            type = str
 	            denon_send = InputFuncSelect
 	            denon_listen = InputFuncSelect
-	        [[[[SurrMode]]]]
-	            type = str
-	            denon_listen = SurrMode
 	        [[[[seturi]]]]
 	            type = str
 	            denon_send = SetAudioURI
 	            enforce_updates = true 
+
 </pre>
 
 ## logic.conf
