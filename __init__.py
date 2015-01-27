@@ -291,7 +291,7 @@ class Denon():
                         self._listenItems[denonListen](value,'DENON')
 
     def _get_deviceinfo(self):
-        responseEtree = self._set_command(self._XMLDeviceInfoURI['0'])
+        responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._XMLDeviceInfoURI['0'])
         # durchinterieren über alle einträge für das listen
         # es ist nur die erste ebene !
         for node in responseEtree:
