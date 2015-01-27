@@ -53,6 +53,7 @@ class Denon():
         self._listenItems = {}
         self._commandItems = {}
         self._commandLock = threading.Lock()
+        self._upnpLock = threading.Lock()
         # die uri für denupnp command channel gilt für den x3000
         # evt. muss hier über einen discovery mechanismus die richtig herausgefunden werden
         # im moment wird die konfiguration statisch gebaut bzw. vorgegeben. in einem erweiterungsschritt
@@ -258,6 +259,7 @@ class Denon():
         # status abholen
         # über alles zones, zone 0 ist der Status
         for denonZone in self._zoneName:
+            self._commandLock.acquire()
             responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._zoneXMLCommandURI[denonZone])
             # durchinterieren über alle einträge für das listen
             # es ist nur die erste ebene !
@@ -289,8 +291,10 @@ class Denon():
                             # es gibt ab und zu einmal eine exception ????
                             value = value.encode('raw_unicode_escape').decode('utf-8')
                         self._listenItems[denonListen](value,'DENON')
+            self._commandLock.release()
 
     def _get_deviceinfo(self):
+        self._commandLock.acquire()
         responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._XMLDeviceInfoURI['0'])
         # durchinterieren über alle einträge für das listen
         # es ist nur die erste ebene !
@@ -300,8 +304,10 @@ class Denon():
                 if denonListen == returnItemIndex:
                     value = node.text
                     self._listenItems[denonListen](value,'DENON')
+        self._commandLock.release()
 
     def _upnp_set_uri(self, uriAudioSource):
+        self._upnpLock.acquire()
         # setzen des bodys mit der uri für die source
         body =  self._SetAVTransportURI['body'].format(uriAudioSource)
         # setzen und anpassen der headers
@@ -310,14 +316,16 @@ class Denon():
         header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
         # abfrage der daten per request
         self._request("POST", self._denonIp, self._denonUpnpPort, self._uriCommand, body, header)
+        self._upnpLock.release()
 
     def _upnp_play(self):
-        # setzen des bodys mit der uri für die source
+        self._upnpLock.acquire()        # setzen des bodys mit der uri für die source
         header = self._Play['headers']
         body =  self._Play['body']   
         header['Content-Length'] = len(body)
         header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
         # abfrage der daten per request
         self._request("POST", self._denonIp, self._denonUpnpPort, self._uriCommand, body, header)
+        self._upnpLock.release()
 
         
