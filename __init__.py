@@ -5,13 +5,12 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.2
+# v 0.3
 # changelog:
-# - refactoring: include upnp inside plugin
-# - error fixes
-# - replace xml library with element tree
-# - adding some status / device messages
-# - adding errorstatus item for monitoring connections
+# - exception handling for text in now playing
+# - change scheduler for polling data
+# - adding timeout for connection handling
+# - adding lower value for update cycles
 # 
 # based on some concepts already made for Denon.
 # Removes completely the Telnet Interface.
@@ -21,6 +20,7 @@
 
 import logging
 import threading
+import time
 import http.client
 import xml.etree.ElementTree as et
 import html.parser
@@ -39,6 +39,9 @@ class Denon():
         self._denonUpnpPort = denon_upnp_port
         self._sh = smarthome
         self._cycle = int(cycle)
+        # lower limit cycle 
+        if self._cycle < 2:
+            self._cycle = 0
         # variablen zur steuerung des plugins
         # hier werden alle bekannte items für lampen eingetragen
         self._sendKeys = {'MasterVolume', 'Power', 'Mute', 'InputFuncSelect', 'SurrMode', 'SetAudioURI'}
@@ -98,10 +101,11 @@ class Denon():
         self.alive = True
         # einmalig zum start die Device info abholen
         self._get_deviceinfo()
-        # After power on poll status objects
-        self._sh.scheduler.add('denon-status-update', self._update_status, cycle=self._cycle)
-        # anstossen des updates zu beginn
-        self._sh.trigger('denon-status-update', self._update_status)
+        # After run poll status objects
+        while self.alive:
+            self._update_status()
+            time.sleep(self._cycle)
+
 
     def stop(self):
         self.alive = False
@@ -218,27 +222,26 @@ class Denon():
                 command = command.replace('<x>',item())
             # zur übergabe müssen die leerzeichen ersetzt werden
             command = command.replace(' ','%20')
-            logger.warning('DENON: update_command_item: item [{0}], value: {1}, command {2}'.format(item,item(),command))
             self._request(self._denonIp, self._denonPort, 'GET', '/goform/formiPhoneAppDirect.xml?'+command)
 
     def _request(self, ip, port, method, path, data=None, header=None):
         # denon avr mit einem http request abfragen
         try:
-            connectionUpnp = http.client.HTTPConnection(ip, port)
+            connection = http.client.HTTPConnection(ip, port, timeout = 1)
             if method == 'GET':
-                connectionUpnp.request(method, path)
+                connection.request(method, path)
             else:
-                connectionUpnp.request(method, path, data.encode(), header)
+                connection.request(method, path, data.encode(), header)
         except Exception as e:
             logger.error('DENON: _request: problem in http.client exception : {0} '.format(e))
             if 'errorstatus' in self._listenItems:
                 # wenn der item abgelegt ist, dann kann er auch gesetzt werden
                 self._listenItems['errorstatus'](True,'DENON')
-            if connectionUpnp:
-                connectionUpnp.close()
+            if connection:
+                connection.close()
         else:
-            responseRaw = connectionUpnp.getresponse()
-            connectionUpnp.close()
+            responseRaw = connection.getresponse()
+            connection.close()
             if 'errorstatus' in self._listenItems:
                 # wenn der item abgelegt ist, dann kann er auch rückgesetzt werden
                 self._listenItems['errorstatus'](False,'DENON')
@@ -247,7 +250,7 @@ class Denon():
                 logger.error('DENON: _request: response Raw: Request failed')
                 return None
             else:
-                response= responseRaw.read().decode('utf-8')
+                response = responseRaw.read().decode('utf-8')
                 if len(response) > 0:
                     return et.fromstring(response)
                 else:
@@ -288,8 +291,16 @@ class Denon():
                             # geschickt umgebaut werden, dann sind immer noch die Umlaute verstümmelt
                             # das bekommen wird mit dem Trick encode / decode wieder hin.
                             value = html.parser.HTMLParser().unescape(value)
-                            # es gibt ab und zu einmal eine exception ????
-                            value = value.encode('raw_unicode_escape').decode('utf-8')
+                            # es gibt ab und zu einmal eine exception, weil es verschiedenste formate gibt
+                            try:
+                                returnValue = value.encode('raw_unicode_escape').decode('utf-8')
+                            except:
+                                try:  
+                                    returnValue = value.encode('raw_unicode_escape').decode('ISO-8859-1')
+                                except:
+                                    returnValue ='Decode Problem'   
+                            finally:
+                                value = returnValue
                         self._listenItems[denonListen](value,'DENON')
             self._commandLock.release()
 
@@ -315,7 +326,7 @@ class Denon():
         header['Content-Length'] = len(body)
         header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
         # abfrage der daten per request
-        self._request("POST", self._denonIp, self._denonUpnpPort, self._uriCommand, body, header)
+        self._request(self._denonIp, self._denonUpnpPort,'POST', self._uriCommand, body, header)
         self._upnpLock.release()
 
     def _upnp_play(self):
@@ -325,7 +336,7 @@ class Denon():
         header['Content-Length'] = len(body)
         header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
         # abfrage der daten per request
-        self._request("POST", self._denonIp, self._denonUpnpPort, self._uriCommand, body, header)
+        self._request(self._denonIp, self._denonUpnpPort, 'POST', self._uriCommand, body, header)
         self._upnpLock.release()
 
         
