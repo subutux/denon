@@ -5,7 +5,7 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.3
+# v 0.31
 # changelog:
 # - exception handling for text in now playing
 # - change scheduler for polling data
@@ -227,7 +227,7 @@ class Denon():
     def _request(self, ip, port, method, path, data=None, header=None):
         # denon avr mit einem http request abfragen
         try:
-            connection = http.client.HTTPConnection(ip, port, timeout = 1)
+            connection = http.client.HTTPConnection(ip, port, timeout = 3)
             if method == 'GET':
                 connection.request(method, path)
             else:
