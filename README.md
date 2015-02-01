@@ -3,7 +3,7 @@ based in X3000, but should work on some Marantz as well
 
 ## New development of DENON plugin for use in smarthome.py (C) Michael Würtenberger 2015
 ## first beta releases just at your own risk ! feedback welcome in smarthome.py forum
-version 0.3
+version 0.4
 ### Targets: 
 - no use of telnet interface anymore
 - using xml - webapp interface
@@ -25,7 +25,8 @@ Typical configuration for a receiver
     class_name = Denon
     class_path = plugins.denon
     denon_ip = 192.168.2.27
-    denon_port = 80  # (optional)
+    denon_port = 80 (optional)
+    cycle = 10 (optional)
 </pre>
 
 ### denon_ip
