@@ -3,7 +3,7 @@ based in X3000, but should work on some Marantz as well
 
 ## New development of DENON plugin for use in smarthome.py (C) Michael Würtenberger 2015
 ## first beta releases just at your own risk ! feedback welcome in smarthome.py forum
-version 0.4
+version 0.5
 ### Targets: 
 - no use of telnet interface anymore
 - using xml - webapp interface

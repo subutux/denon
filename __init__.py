@@ -5,11 +5,13 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.4
+# v 0.5
 # changelog:
-# - exception handling for text in now playing
-# - performance optimization, move to lite version of status
-# - exception handling for receiver faults under heavy load
+# - bugfixing
+# - refactoring of some code
+# - surrmode check
+# - preparation ssdp 
+# - conncection logs reduced
 # 
 # based on some concepts already made for Denon.
 # removes completely the Telnet Interface.
@@ -24,7 +26,6 @@ import http.client
 import xml.etree.ElementTree as et
 import html.parser
 import pydevd
-from pickle import NONE
 
 logger = logging.getLogger('Denon')
 
@@ -49,15 +50,13 @@ class Denon():
                             'DeviceZones', 'MacAddress', 'ModelName'} 
         # die Zones werden in der Device übersicht mit 0 = main und 1 = zone2 übertragen
         self._zoneName = {'0' : 'Status', '1' : 'MAIN ZONE', '2': 'ZONE2'}
-        self._zoneXMLCommandURI = {'0' :'/goform/formNetAudio_StatusXml.xml', '1' : '/goform/formMainZone_MainZoneXmlStatusLite.xml', '2': '/goform/formZone2_Zone2XmlStatusLite.xml'}
+        self._zoneXMLCommandURI = {'0' :'/goform/formNetAudio_StatusXml.xml', '1' : '/goform/formMainZone_MainZoneXmlStatus.xml', '2': '/goform/formZone2_Zone2XmlStatus.xml'}
         self._XMLDeviceInfoURI = {'0': '/goform/Deviceinfo.xml'}
         # hier werden alle bekannte items für den denon eingetragen
         # items, die fürs senden konfiguriert sind 
         self._sendItems = {}
         # items, die fürs empfangen konfiguriert sind 
         self._listenItems = {}
-        # items, die für kommandos konfiguriert sind 
-        self._commandItems = {}
         # merker, welche zone konfiguriert wurde. ich möchte keine abfragen, die nicht konfiguriert ist
         self._configuredZones = {} 
         # lock, um mehrfache zugriffe auf request zu seriealisieren
@@ -146,12 +145,16 @@ class Denon():
         if 'denon_send' in item.conf and 'denon_command' in item.conf:
             logger.warning('DENON: parse_item: in denon item [{0}] denon_send and denon_command is used at the same time'.format(item))
             return None
-        
+
         # zuerst müssen die listen items geparsed werden, weil die parallel gelten können
         if 'denon_listen' in item.conf:
             listenValue = item.conf['denon_listen']
             denonZone = self._find_item_attribute(item, 'denon_zone', 1)
-            # jede Zone wird eingetragen
+            # test, ob konfigurierte zone existiert
+            if not denonZone in self._zoneName:
+                logger.warning('DENON: parse_item: zone number exceeds limit for item [{0}]'.format(item))
+                denonZone = '1'
+            # jede konfigurierte Zone wird eingetragen
             self._configuredZones[denonZone] = 'ON'
             denonIndex = denonZone + listenValue
             if listenValue in self._listenKeys:
@@ -168,31 +171,26 @@ class Denon():
         if 'denon_send' in item.conf:
             sendValue = item.conf['denon_send'] 
             denonZone = self._find_item_attribute(item, 'denon_zone', 1)
-            # jede Zone wird eingetragen
+            # test, ob konfigurierte zone existiert
+            if not denonZone in self._zoneName:
+                logger.warning('DENON: parse_item: zone number exceeds limit for item [{0}]'.format(item))
+                denonZone = '1'
+            # jede konfigurierte Zone wird eingetragen
             self._configuredZones[denonZone] = 'ON'
             denonIndex = denonZone + sendValue
             if sendValue in self._sendKeys:
                 item.conf['denon_zone'] = denonZone
                 if not denonIndex in self._sendItems:
                     # item in die liste aufnehmen
-                    self._commandItems[denonIndex] = item
+                    self._sendItems[denonIndex] = item
                     # update methode setzen
                     return self.update_send_item
                 else:
                     logger.warning('DENON: parse_item: in denon item [{0}] in denon_send = {1} is duplicated to item [{2}]'.format(item, sendValue, self._sendItems[sendValue]))
 
         if 'denon_command' in item.conf:
-            sendCommand = item.conf['denon_command']
-            denonZone = self._find_item_attribute(item, 'denon_zone', 1)
-            # jede Zone wird eingetragen
-            self._configuredZones[denonZone] = 'ON'
-            denonIndex = denonZone + sendCommand
-            item.conf['denon_zone'] = denonZone
-            if not denonIndex in self._commandItems:
-                # item in die liste aufnehmen
-                self._commandItems[denonIndex] = item
-                # update methode setzen
-                return self.update_command_item
+            # update methode setzen
+            return self.update_command_item
             
     def parse_logic(self, logic):
         pass
@@ -236,7 +234,7 @@ class Denon():
 
     def _request(self, ip, port, method, path, data=None, header=None):
         # denon avr mit einem http request abfragen
-        self._requestLock.acquire()
+        response = None
         try:
             connection = http.client.HTTPConnection(ip, port, timeout = 3)
             if method == 'GET':
@@ -244,24 +242,21 @@ class Denon():
             else:
                 connection.request(method, path, data.encode(), header)
         except Exception as e:
-            logger.error('DENON: _request: problem in http.client exception : {0} '.format(e))
-            if 'errorstatus' in self._listenItems:
-                # wenn der item abgelegt ist, dann kann er auch gesetzt werden
-                self._listenItems['errorstatus'](True,'DENON')
-            if connection:
-                connection.close()
-            self._requestLock.release()
+            if (e.args[0] == 'timed out') or (e.args[1] == 'Host is down'):
+                if 'errorstatus' in self._listenItems:
+                    # wenn der item abgelegt ist, dann kann er auch gesetzt werden
+                    self._listenItems['errorstatus'](True,'DENON')
+            else:
+                logger.error('DENON: _request: problem in http.client exception : {0} '.format(e))
+                
         else:
             responseRaw = connection.getresponse()
-            connection.close()
             if 'errorstatus' in self._listenItems:
                 # wenn der item abgelegt ist, dann kann er auch rückgesetzt werden
                 self._listenItems['errorstatus'](False,'DENON')
             # rückmeldung 200 ist OK
             if responseRaw.status != 200:
                 logger.warning('DENON: _request: Request failed, error code: {0}',format(responseRaw.status))
-                self._requestLock.release()
-                return None
             else:
                 response = responseRaw.read()
                 # in fehlerfällen kommen manchmal strings vor, die 0xc0 enthalten, eine nicht valide utf-8 codierung
@@ -271,29 +266,29 @@ class Denon():
                 except:
                     # lassischer fehler unter last vom webserver des Denon
                     logger.warning('DENON: _request: utf-8 decode failed !')
-                    response = ''
+                    response = None
                 finally:
-                    if len(response) > 0:
+                    if response is not None:
                         # unter last macht der webserver auch im XML noch fehler, muss abgefangen werden
                         try:
                             # jetzt wird der xml string nach dict geparsed 
                             response = et.fromstring(response)
                         except:
                             response = None
-                        finally:
-                            self._requestLock.release()
-                            return response
-                    else:
-                        self._requestLock.release()
-                        return None           
+        finally:
+            if connection:
+                connection.close()
+            return response
                 
     def _update_status(self, denonZone):
-    # Poll XML status
-    # ToDo müssen alle themen wirklich so abgearbeitet werden, oder kann ich auf ein subset referezieren bei der Abarbeitung des XML
+        # Poll XML status
+        # ToDo müssen alle themen wirklich so abgearbeitet werden, oder kann ich auf ein subset referezieren bei der Abarbeitung des XML
         # status abholen
+        self._requestLock.acquire()
         responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._zoneXMLCommandURI[denonZone])
+        self._requestLock.release()
         # im falle eines fehlers wird None zurückgeliefert
-        if responseEtree != None:
+        if responseEtree is not None:
             # durchinterieren über alle einträge für das listen
             # es ist nur die erste ebene !
             for node in responseEtree:
@@ -315,8 +310,10 @@ class Denon():
                                 # für now playing. ansonsten kann auch menueinträge dort stattfinden
                                 # dieser kann aus meherer Zeilen zusammengesetzt sein
                                 value = ''
-                                for child in node.getchildren():
-                                    if child.text and not child.text == 'Now Playing':
+                                # wir starten ab dem 2. element -> das ist [1:], da das erste ja "Now Playing" sagt
+                                for child in node.getchildren()[1:]:
+                                    # wenn noch einträge vorhanden sind
+                                    if child.text :
                                         value = value + child.text
                             else:
                                 # sonst bekomme ich vom denon menus zum auswählen. hier wird auch die komplette
@@ -342,10 +339,12 @@ class Denon():
                                 value = returnValue
                         self._listenItems[denonListen](value,'DENON')
 
-    def _get_deviceinfo(self):
+    def _get_deviceinfo(self): 
+        self._requestLock.acquire()
         responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._XMLDeviceInfoURI['0'])
+        self._requestLock.release()
         # im falle eines fehlers wird None zurückgeliefert
-        if responseEtree != None:
+        if responseEtree is not None:
             # durchinterieren über alle einträge für das listen
             # es ist nur die erste ebene !
             for node in responseEtree:
@@ -363,14 +362,18 @@ class Denon():
         header['Content-Length'] = len(body)
         header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
         # abfrage der daten per request
+        self._requestLock.acquire()
         self._request(self._denonIp, self._denonUpnpPort,'POST', self._uriCommand, body, header)
+        self._requestLock.release()
 
     def _upnp_play(self):
-        header = self._Play['headers']
+        header = self._Play['headers'] 
         body =  self._Play['body']   
         header['Content-Length'] = len(body)
         header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
         # abfrage der daten per request
+        self._requestLock.acquire()
         self._request(self._denonIp, self._denonUpnpPort, 'POST', self._uriCommand, body, header)
+        self._requestLock.release()
 
         
