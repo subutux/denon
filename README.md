@@ -17,6 +17,16 @@ Needs httplib, etree, upnp.py in plugin directory
 ## Supported Hardware
 DENON AVR, tested with X3000 model.
 
+# Installation
+Base for the installation should be the actual smarthome.py installation master or development.
+There is already a DENON plugin provided through this installations. This is a different (older) one.
+If you would like to switch to the plugin, which is provided in this Github repo, please replace the content
+of the plugin folder 
+<pre>
+../plugins/denon/*
+</pre>
+with the content provided in this repo. This includes mainly the file __init__.py
+
 # Configuration
 ## plugin.conf
 Typical configuration for a receiver
