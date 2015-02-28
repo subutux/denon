@@ -12,7 +12,7 @@ version 0.5
 - multiple zone support (at least 2)
 
 # Requirements
-Needs httplib, etree, upnp.py in plugin directory
+none
 
 ## Supported Hardware
 DENON AVR, tested with X3000 model.
