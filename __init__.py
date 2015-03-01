@@ -5,7 +5,7 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.5
+# v 0.51
 # changelog:
 # - bugfixing
 # - refactoring of some code
@@ -25,7 +25,6 @@ import time
 import http.client
 import xml.etree.ElementTree as et
 import html.parser
-import pydevd
 
 logger = logging.getLogger('Denon')
 
