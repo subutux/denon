@@ -3,7 +3,7 @@ based in X3000, but should work on some Marantz as well
 
 ## New development of DENON plugin for use in smarthome.py (C) Michael Würtenberger 2015
 ## first beta releases just at your own risk ! feedback welcome in smarthome.py forum
-version 0.5
+version 0.52
 ### Targets: 
 - no use of telnet interface anymore
 - using xml - webapp interface
@@ -14,18 +14,13 @@ version 0.5
 # Requirements
 none
 
+#changelog
+v0.52
+- _get_deviceInfo nur in der run() abfrage solange alive = true
+- update readme zu den item einträgen
+
 ## Supported Hardware
 DENON AVR, tested with X3000 model.
-
-# Installation
-Base for the installation should be the actual smarthome.py installation master or development.
-There is already a DENON plugin provided through this installations. This is a different (older) one.
-If you would like to switch to the plugin, which is provided in this Github repo, please replace the content
-of the plugin folder 
-<pre>
-../plugins/denon/*
-</pre>
-with the content provided in this repo. This includes mainly the file __init__.py
 
 # Configuration
 ## plugin.conf
@@ -131,7 +126,7 @@ is written to the command parameter.
 	            denon_listen = Mute
 	        [[[[Input]]]]
 	            type = str
-	            denon_send = InputFuncSelect
+	            denon_command = '<x>'
 	            denon_listen = InputFuncSelect
 	        [[[[SurrMode]]]]
 	            type = str
@@ -164,7 +159,7 @@ is written to the command parameter.
 	            denon_listen = Mute
 	        [[[[Input]]]]
 	            type = str
-	            denon_send = InputFuncSelect
+	            denon_command = '<x>'
 	            denon_listen = InputFuncSelect
 	        [[[[seturi]]]]
 	            type = str

@@ -5,7 +5,7 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.51
+# v 0.52
 # changelog:
 # - bugfixing
 # - refactoring of some code
@@ -25,6 +25,7 @@ import time
 import http.client
 import xml.etree.ElementTree as et
 import html.parser
+import pydevd
 
 logger = logging.getLogger('Denon')
 
@@ -103,7 +104,8 @@ class Denon():
     def run(self):
         self.alive = True
         # einmalig zum start die Device info abholen
-        self._get_deviceinfo()
+        if self.alive:
+            self._get_deviceinfo()
         # ich hole regelmässig im polling den wert der zonen
         while self.alive:
             # allerdings nur für die konfigurierten zonen
@@ -374,5 +376,4 @@ class Denon():
         self._requestLock.acquire()
         self._request(self._denonIp, self._denonUpnpPort, 'POST', self._uriCommand, body, header)
         self._requestLock.release()
-
         
