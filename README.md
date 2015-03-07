@@ -86,7 +86,7 @@ is written to the command parameter.
 
 ## Example
 #### items/test.conf
-<pre>
+```text
 [mm]
     [[denon]]
 
@@ -126,7 +126,7 @@ is written to the command parameter.
 	            denon_listen = Mute
 	        [[[[Input]]]]
 	            type = str
-	            denon_command = '/<x/>'
+	            denon_command = '<x>'
 	            denon_listen = InputFuncSelect
 	        [[[[SurrMode]]]]
 	            type = str
@@ -166,7 +166,7 @@ is written to the command parameter.
 	            denon_send = SetAudioURI
 	            enforce_updates = true 
 
-</pre>
+``
 
 ## logic.conf
 No logic attributes.
