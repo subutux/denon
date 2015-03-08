@@ -3,7 +3,7 @@ based in X3000, but should work on some Marantz as well
 
 ## New development of DENON plugin for use in smarthome.py (C) Michael Würtenberger 2015
 ## first beta releases just at your own risk ! feedback welcome in smarthome.py forum
-version 0.52
+version 0.53
 ### Targets: 
 - no use of telnet interface anymore
 - using xml - webapp interface
@@ -15,6 +15,10 @@ version 0.52
 none
 
 #changelog
+v0.53
+- min Zykluszeit 5 Sekunden
+- task dafür in den scheduler, initialisierung unter __init__
+
 v0.52
 - _get_deviceInfo nur in der run() abfrage solange alive = true
 - update readme zu den item einträgen
@@ -166,7 +170,7 @@ is written to the command parameter.
 	            denon_send = SetAudioURI
 	            enforce_updates = true 
 
-``
+```
 
 ## logic.conf
 No logic attributes.
