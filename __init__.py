@@ -5,7 +5,13 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.53
+# v 0.52
+# changelog:
+# - bugfixing
+# - refactoring of some code
+# - surrmode check
+# - preparation ssdp 
+# - conncection logs reduced
 # 
 # based on some concepts already made for Denon.
 # removes completely the Telnet Interface.
@@ -35,8 +41,8 @@ class Denon():
         self._sh = smarthome
         self._cycle = int(cycle)
         # lower limit cycle 
-        if self._cycle < 5:
-            self._cycle = 5
+        if self._cycle < 1:
+            self._cycle = 1
         # variablen zur steuerung des plugins
         # hier werden alle bekannte items für lampen eingetragen
         self._sendKeys = {'MasterVolume', 'Power', 'Mute', 'InputFuncSelect', 'SurrMode', 'SetAudioURI'}
@@ -55,11 +61,6 @@ class Denon():
         self._configuredZones = {} 
         # lock, um mehrfache zugriffe auf request zu seriealisieren
         self._requestLock = threading.Lock()
-        # jetzt noch die zyklischen aufgaben
-        # ich hole regelmässig im polling den wert der zonen
-        # allerdings nur für die konfigurierten zonen
-        for zone in self._configuredZones:
-            self._sh.scheduler.add('DENON', self._update_status(zone), prio=5, cycle=self._cycle, offset=2)
         # die uri für denupnp command channel gilt für den x3000
         # evt. muss hier über einen discovery mechanismus die richtig herausgefunden werden
         # im moment wird die konfiguration statisch gebaut bzw. vorgegeben. in einem erweiterungsschritt
@@ -103,7 +104,14 @@ class Denon():
     def run(self):
         self.alive = True
         # einmalig zum start die Device info abholen
-        self._get_deviceinfo()
+        if self.alive:
+            self._get_deviceinfo()
+        # ich hole regelmässig im polling den wert der zonen
+        while self.alive:
+            # allerdings nur für die konfigurierten zonen
+            for zone in self._configuredZones:
+                self._update_status(zone)
+            time.sleep(self._cycle)
 
     def stop(self):
         self.alive = False
