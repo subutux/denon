@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 # vim: set encoding=utf-8 tabstop=4 softtabstop=4 shiftwidth=4 expandtab
 #
-# Copyright 2015 Michael Würtenberger
+# Copyright 2015, 2016 Michael Würtenberger
 #
 # Denon-Plugin for sh.py
 #
-# v 0.52
-# changelog:
-# - bugfixing
-# - refactoring of some code
-# - surrmode check
-# - preparation ssdp 
-# - conncection logs reduced
+# v 0.55
 # 
 # based on some concepts already made for Denon.
 # removes completely the Telnet Interface.
@@ -25,7 +19,6 @@ import time
 import http.client
 import xml.etree.ElementTree as et
 import html.parser
-import pydevd
 
 logger = logging.getLogger('Denon')
 
@@ -34,15 +27,14 @@ class Denon():
     # Initialize connection to receiver
     def __init__(self, smarthome, denon_ip, denon_port = '80', denon_upnp_port = '8080', cycle = 5):
         
-#        pydevd.settrace('192.168.2.57')
         self._denonIp = denon_ip
         self._denonPort = denon_port
         self._denonUpnpPort = denon_upnp_port
         self._sh = smarthome
         self._cycle = int(cycle)
         # lower limit cycle 
-        if self._cycle < 1:
-            self._cycle = 1
+        if self._cycle < 2:
+            self._cycle = 2
         # variablen zur steuerung des plugins
         # hier werden alle bekannte items für lampen eingetragen
         self._sendKeys = {'MasterVolume', 'Power', 'Mute', 'InputFuncSelect', 'SurrMode', 'SetAudioURI'}
@@ -61,6 +53,15 @@ class Denon():
         self._configuredZones = {} 
         # lock, um mehrfache zugriffe auf request zu seriealisieren
         self._requestLock = threading.Lock()
+        # einmalig zum start die Device info abholen
+        self._get_deviceinfo()
+        # jetzt noch die zyklischen aufgaben
+        # ich hole regelmässig im polling den wert der zonen
+        # allerdings nur für die konfigurierten zonen
+        # After power on poll status objects
+        self._sh.scheduler.add('denon-status-update', self._update_status, prio=5, cycle=self._cycle, offset=2)
+        # anstossen des updates zu beginn
+        self._sh.trigger('denon-status-update', self._update_status)
         # die uri für denupnp command channel gilt für den x3000
         # evt. muss hier über einen discovery mechanismus die richtig herausgefunden werden
         # im moment wird die konfiguration statisch gebaut bzw. vorgegeben. in einem erweiterungsschritt
@@ -103,15 +104,6 @@ class Denon():
         
     def run(self):
         self.alive = True
-        # einmalig zum start die Device info abholen
-        if self.alive:
-            self._get_deviceinfo()
-        # ich hole regelmässig im polling den wert der zonen
-        while self.alive:
-            # allerdings nur für die konfigurierten zonen
-            for zone in self._configuredZones:
-                self._update_status(zone)
-            time.sleep(self._cycle)
 
     def stop(self):
         self.alive = False
@@ -235,6 +227,7 @@ class Denon():
 
     def _request(self, ip, port, method, path, data=None, header=None):
         # denon avr mit einem http request abfragen
+        self._requestLock.acquire()
         response = None
         try:
             connection = http.client.HTTPConnection(ip, port, timeout = 3)
@@ -246,7 +239,7 @@ class Denon():
             if (e.args[0] == 'timed out') or (e.args[1] == 'Host is down'):
                 if 'errorstatus' in self._listenItems:
                     # wenn der item abgelegt ist, dann kann er auch gesetzt werden
-                    self._listenItems['errorstatus'](True,'DENON')
+                    self._listenItems['errorstatus'](format(e),'DENON')
             else:
                 logger.error('DENON: _request: problem in http.client exception : {0} '.format(e))
                 
@@ -279,71 +272,69 @@ class Denon():
         finally:
             if connection:
                 connection.close()
+            self._requestLock.release()
             return response
                 
-    def _update_status(self, denonZone):
+    def _update_status(self):
         # Poll XML status
         # ToDo müssen alle themen wirklich so abgearbeitet werden, oder kann ich auf ein subset referezieren bei der Abarbeitung des XML
-        # status abholen
-        self._requestLock.acquire()
-        responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._zoneXMLCommandURI[denonZone])
-        self._requestLock.release()
-        # im falle eines fehlers wird None zurückgeliefert
-        if responseEtree is not None:
-            # durchinterieren über alle einträge für das listen
-            # es ist nur die erste ebene !
-            for node in responseEtree:
-                returnItemIndex = denonZone + node.tag
-                for denonListen in self._listenItems:
-                    if denonListen == returnItemIndex:
-                        value = node.getchildren()[0].text
-                        # wenn die beiden gleich sind, dann kan nich den wert zuweisen
-                        if node.tag in ['POWER', 'MUTE']:
-                            value = bool((True if value.upper() == 'ON' else False))
-                        elif node.tag in ['MasterVolume']:
-                            # wenn das volume 0 ist, dann wird im xml '--' zurückgegeben !
-                            if value == '--':
-                                value = 0
-                            else:
-                                value = int(float(value) + 80)
-                        elif node.tag == 'szLine':
-                            if value == 'Now Playing':
-                                # für now playing. ansonsten kann auch menueinträge dort stattfinden
-                                # dieser kann aus meherer Zeilen zusammengesetzt sein
-                                value = ''
-                                # wir starten ab dem 2. element -> das ist [1:], da das erste ja "Now Playing" sagt
-                                for child in node.getchildren()[1:]:
-                                    # wenn noch einträge vorhanden sind
-                                    if child.text :
-                                        value = value + child.text
-                            else:
-                                # sonst bekomme ich vom denon menus zum auswählen. hier wird auch die komplette
-                                # bedienung rüber abgewickelt. die will ich mir nicht ansehen
-                                value = ''
-                            # da ist der Text im XML mehrfach daneben codiert. als erstes müssen die  HTML codiert 
-                            # geschickt umgebaut werden, dann sind immer noch die Umlaute verstümmelt
-                            # das bekommen wird mit dem Trick encode / decode wieder hin.
-                            value = html.parser.HTMLParser().unescape(value)
-                            # es gibt ab und zu einmal eine exception, weil es verschiedenste formate gibt
-                            try:
-                                # erst wird versucht klassisch nach utf-8 zu decodieren
-                                returnValue = value.encode('raw_unicode_escape').decode('utf-8')
-                            except:
-                                try:  
-                                    # dann nach ISO-8859-1
-                                    returnValue = value.encode('raw_unicode_escape').decode('ISO-8859-1')
+        # status abholen über alle konfigurierten zonen
+        for denonZone in self._configuredZones:
+            responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._zoneXMLCommandURI[denonZone])
+            # im falle eines fehlers wird None zurückgeliefert
+            if responseEtree is not None:
+                # durchinterieren über alle einträge für das listen
+                # es ist nur die erste ebene !
+                for node in responseEtree:
+                    returnItemIndex = denonZone + node.tag
+                    for denonListen in self._listenItems:
+                        if denonListen == returnItemIndex:
+                            value = node.getchildren()[0].text
+                            # wenn die beiden gleich sind, dann kan nich den wert zuweisen
+                            if node.tag in ['POWER', 'MUTE']:
+                                value = bool((True if value.upper() == 'ON' else False))
+                            elif node.tag in ['MasterVolume']:
+                                # wenn das volume 0 ist, dann wird im xml '--' zurückgegeben !
+                                if value == '--':
+                                    value = 0
+                                else:
+                                    value = int(float(value) + 80)
+                            elif node.tag == 'szLine':
+                                if value == 'Now Playing':
+                                    # für now playing. ansonsten kann auch menueinträge dort stattfinden
+                                    # dieser kann aus meherer Zeilen zusammengesetzt sein
+                                    value = ''
+                                    # wir starten ab dem 2. element -> das ist [1:], da das erste ja "Now Playing" sagt
+                                    for child in node.getchildren()[1:]:
+                                        # wenn noch einträge vorhanden sind
+                                        if child.text :
+                                            value = value + child.text
+                                else:
+                                    # sonst bekomme ich vom denon menus zum auswählen. hier wird auch die komplette
+                                    # bedienung rüber abgewickelt. die will ich mir nicht ansehen
+                                    value = ''
+                                # da ist der Text im XML mehrfach daneben codiert. als erstes müssen die  HTML codiert 
+                                # geschickt umgebaut werden, dann sind immer noch die Umlaute verstümmelt
+                                # das bekommen wird mit dem Trick encode / decode wieder hin.
+                                value = html.parser.HTMLParser().unescape(value)
+                                # es gibt ab und zu einmal eine exception, weil es verschiedenste formate gibt
+                                try:
+                                    # erst wird versucht klassisch nach utf-8 zu decodieren
+                                    returnValue = value.encode('raw_unicode_escape').decode('utf-8')
                                 except:
-                                    # hier schreibe ich es direkt in die anzeige, dann sehe ich das sofort
-                                    # künftig sicherlich eher eine warning, passiert aber zu selten.
-                                    returnValue ='Decode Problem'   
-                            finally:
-                                value = returnValue
-                        self._listenItems[denonListen](value,'DENON')
+                                    try:  
+                                        # dann nach ISO-8859-1
+                                        returnValue = value.encode('raw_unicode_escape').decode('ISO-8859-1')
+                                    except:
+                                        # hier schreibe ich es direkt in die anzeige, dann sehe ich das sofort
+                                        # künftig sicherlich eher eine warning, passiert aber zu selten.
+                                        returnValue ='Decode Problem'   
+                                finally:
+                                    value = returnValue
+                            self._listenItems[denonListen](value,'DENON')
 
     def _get_deviceinfo(self): 
-        self._requestLock.acquire()
         responseEtree = self._request(self._denonIp, self._denonPort, 'GET', self._XMLDeviceInfoURI['0'])
-        self._requestLock.release()
         # im falle eines fehlers wird None zurückgeliefert
         if responseEtree is not None:
             # durchinterieren über alle einträge für das listen
