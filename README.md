@@ -3,7 +3,7 @@ based in X3000, but should work on some Marantz as well
 
 ## New development of DENON plugin for use in smarthome.py (C) Michael Würtenberger 2015
 ## first beta releases just at your own risk ! feedback welcome in smarthome.py forum
-version 0.55
+version 0.6
 ### Targets: 
 - no use of telnet interface anymore
 - using xml - webapp interface
@@ -100,7 +100,7 @@ is written to the command parameter.
 [mm]
     [[denon]]
 
-    	[[[status]]]
+   	[[[status]]]
     		denon_zone = 0
     		# device infos -> received once per start
 	        [[[[ModelName]]]]
@@ -119,6 +119,12 @@ is written to the command parameter.
 	        [[[[errorstatus]]]]
 	            type = str
 	            denon_listen = errorstatus
+	        [[[[CommApiVers]]]]
+	            type = str
+	            denon_listen = CommApiVers
+	        [[[[UpgradeVersion]]]]
+	            type = str
+	            denon_listen = UpgradeVersion
 
     	[[[main]]]
     		denon_zone = 1

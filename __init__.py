@@ -5,7 +5,7 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.55
+# v 0.6
 # 
 # based on some concepts already made for Denon.
 # removes completely the Telnet Interface.
@@ -19,8 +19,10 @@ import time
 import http.client
 import xml.etree.ElementTree as et
 import html.parser
+from lib.tools import Tools
 
 logger = logging.getLogger('Denon')
+client = Tools()
 
 class Denon():
 
@@ -39,7 +41,8 @@ class Denon():
         # hier werden alle bekannte items für lampen eingetragen
         self._sendKeys = {'MasterVolume', 'Power', 'Mute', 'InputFuncSelect', 'SurrMode', 'SetAudioURI'}
         self._listenKeys = {'MasterVolume', 'Power', 'Mute', 'InputFuncSelect', 'SurrMode', 'szLine',
-                            'DeviceZones', 'MacAddress', 'ModelName'} 
+                            'DeviceZones', 'MacAddress', 'ModelName', 'errorstatus', 'CommApiVers', 'BrandCode', 'ProductCategory',
+                            'DeliveryCode', 'UpgradeVersion', 'DeviceCapabilities', 'DeviceInfoVers'} 
         # die Zones werden in der Device übersicht mit 0 = main und 1 = zone2 übertragen
         self._zoneName = {'0' : 'Status', '1' : 'MAIN ZONE', '2': 'ZONE2'}
         self._zoneXMLCommandURI = {'0' :'/goform/formNetAudio_StatusXml.xml', '1' : '/goform/formMainZone_MainZoneXmlStatus.xml', '2': '/goform/formZone2_Zone2XmlStatus.xml'}
@@ -52,16 +55,16 @@ class Denon():
         # merker, welche zone konfiguriert wurde. ich möchte keine abfragen, die nicht konfiguriert ist
         self._configuredZones = {} 
         # lock, um mehrfache zugriffe auf request zu seriealisieren
-        self._requestLock = threading.Lock()
-        # einmalig zum start die Device info abholen
-        self._get_deviceinfo()
+        self._denonLock = threading.Lock()
         # jetzt noch die zyklischen aufgaben
         # ich hole regelmässig im polling den wert der zonen
         # allerdings nur für die konfigurierten zonen
         # After power on poll status objects
         self._sh.scheduler.add('denon-status-update', self._update_status, prio=5, cycle=self._cycle, offset=2)
+        self._sh.scheduler.add('denon-get-deviceinfo', self._get_deviceinfo, prio=5, cycle=self._cycle*30)
         # anstossen des updates zu beginn
         self._sh.trigger('denon-status-update', self._update_status)
+        self._sh.trigger('denon-get-deviceinfo', self._get_deviceinfo)
         # die uri für denupnp command channel gilt für den x3000
         # evt. muss hier über einen discovery mechanismus die richtig herausgefunden werden
         # im moment wird die konfiguration statisch gebaut bzw. vorgegeben. in einem erweiterungsschritt
@@ -104,6 +107,8 @@ class Denon():
         
     def run(self):
         self.alive = True
+        # einmalig zum start die Device info abholen
+        self._get_deviceinfo()
 
     def stop(self):
         self.alive = False
@@ -227,53 +232,35 @@ class Denon():
 
     def _request(self, ip, port, method, path, data=None, header=None):
         # denon avr mit einem http request abfragen
-        self._requestLock.acquire()
-        response = None
-        try:
-            connection = http.client.HTTPConnection(ip, port, timeout = 3)
-            if method == 'GET':
-                connection.request(method, path)
-            else:
-                connection.request(method, path, data.encode(), header)
-        except Exception as e:
-            if (e.args[0] == 'timed out') or (e.args[1] == 'Host is down'):
-                if 'errorstatus' in self._listenItems:
-                    # wenn der item abgelegt ist, dann kann er auch gesetzt werden
-                    self._listenItems['errorstatus'](format(e),'DENON')
-            else:
-                logger.error('DENON: _request: problem in http.client exception : {0} '.format(e))
-                
+        self._denonLock.acquire()
+        url = 'http://' + ip + ':' + port + path
+        # setzen des fehlerstatus item
+        if 'errorstatus' in self._listenItems:
+            # wenn der item abgelegt ist, dann kann er auch rückgesetzt werden
+            errorItem = self._listenItems['errorstatus']
         else:
-            responseRaw = connection.getresponse()
-            if 'errorstatus' in self._listenItems:
-                # wenn der item abgelegt ist, dann kann er auch rückgesetzt werden
-                self._listenItems['errorstatus'](False,'DENON')
-            # rückmeldung 200 ist OK
-            if responseRaw.status != 200:
-                logger.warning('DENON: _request: Request failed, error code: {0}',format(responseRaw.status))
-            else:
-                response = responseRaw.read()
-                # in fehlerfällen kommen manchmal strings vor, die 0xc0 enthalten, eine nicht valide utf-8 codierung
-                # konkret bei Last <BrandCode>\xc0</BrandCode>
-                try:
-                    response = response.decode('utf-8')
-                except:
-                    # lassischer fehler unter last vom webserver des Denon
-                    logger.warning('DENON: _request: utf-8 decode failed !')
-                    response = None
-                finally:
-                    if response is not None:
-                        # unter last macht der webserver auch im XML noch fehler, muss abgefangen werden
-                        try:
-                            # jetzt wird der xml string nach dict geparsed 
-                            response = et.fromstring(response)
-                        except:
-                            response = None
+            errorItem = None
+        # dann der aufruf kompatibel, aber inhaltlich nicht identisch fetch_url aus lib.tools, daher erst eimal das fehlerobjekt nicht mehr da
+        response = client.fetch_url(url, None, None, 2, 1, method, None, errorItem)
+
+        # in fehlerfällen kommen manchmal strings vor, die 0xc0 enthalten, eine nicht valide utf-8 codierung
+        # konkret bei Last <BrandCode>\xc0</BrandCode>
+        try:
+            response = response.decode('utf-8')
+        except:
+            # lassischer fehler unter last vom webserver des Denon
+            logger.warning('DENON: _request: utf-8 decode failed !')
+            response = None
         finally:
-            if connection:
-                connection.close()
-            self._requestLock.release()
-            return response
+            if response is not None:
+                # unter last macht der webserver auch im XML noch fehler, muss abgefangen werden
+                try:
+                    # jetzt wird der xml string nach dict geparsed 
+                    response = et.fromstring(response)
+                except:
+                    response = None
+        self._denonLock.release()
+        return response
                 
     def _update_status(self):
         # Poll XML status
@@ -354,9 +341,7 @@ class Denon():
         header['Content-Length'] = len(body)
         header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
         # abfrage der daten per request
-        self._requestLock.acquire()
         self._request(self._denonIp, self._denonUpnpPort,'POST', self._uriCommand, body, header)
-        self._requestLock.release()
 
     def _upnp_play(self):
         header = self._Play['headers'] 
@@ -364,7 +349,5 @@ class Denon():
         header['Content-Length'] = len(body)
         header['HOST'] = self._denonIp + ':' + self._denonUpnpPort
         # abfrage der daten per request
-        self._requestLock.acquire()
         self._request(self._denonIp, self._denonUpnpPort, 'POST', self._uriCommand, body, header)
-        self._requestLock.release()
         
