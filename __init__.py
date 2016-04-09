@@ -5,7 +5,7 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.6
+# v 0.61
 # 
 # based on some concepts already made for Denon.
 # removes completely the Telnet Interface.
@@ -241,7 +241,7 @@ class Denon():
         else:
             errorItem = None
         # dann der aufruf kompatibel, aber inhaltlich nicht identisch fetch_url aus lib.tools, daher erst eimal das fehlerobjekt nicht mehr da
-        response = client.fetch_url(url, None, None, 2, 1, method, None, errorItem)
+        response = client.fetch_url(url, None, None, 2, 1, method, None, errorItem, header)
 
         # in fehlerfällen kommen manchmal strings vor, die 0xc0 enthalten, eine nicht valide utf-8 codierung
         # konkret bei Last <BrandCode>\xc0</BrandCode>
