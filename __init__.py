@@ -5,7 +5,7 @@
 #
 # Denon-Plugin for sh.py
 #
-# v 0.61
+# v 0.63
 # 
 # based on some concepts already made for Denon.
 # removes completely the Telnet Interface.
@@ -53,7 +53,7 @@ class Denon():
         # merker, welche zone konfiguriert wurde. ich möchte keine abfragen, die nicht konfiguriert ist
         self._configuredZones = {} 
         # lock, um mehrfache zugriffe auf request zu seriealisieren
-        self._denonLock = threading.Lock()
+        self._requestLock = threading.Lock()
         # jetzt noch die zyklischen aufgaben
         # ich hole regelmässig im polling den wert der zonen
         # allerdings nur für die konfigurierten zonen
