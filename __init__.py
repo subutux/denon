@@ -21,7 +21,6 @@ import xml.etree.ElementTree as et
 import html.parser
 
 logger = logging.getLogger('Denon')
-client = Tools()
 
 class Denon():
 
